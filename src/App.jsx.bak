@@ -1,7 +1,4 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import * as XLSXLib from "xlsx";
-import { db } from "./firebase.js";
-import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs } from "firebase/firestore";
 
 // ─── SheetJS ──────────────────────────────────────────────────────────────────
 function cargarXLSX() {
@@ -1063,67 +1060,17 @@ function TabResumen({envios,zonasConfig}) {
 // APP
 // ════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [pantalla,setPantalla]   = useState("dashboard");
+  const [pantalla,setPantalla]   = useState("inicio");
   const [borrador,setBorrador]   = useState([]);
   const [envios,setEnvios]       = useState([]);
   const [zonasConfig,setZonasConfig] = useState(ZONAS_INIT);
   const [tab,setTab]             = useState("envios");
   const [error,setError]         = useState("");
   const [loading,setLoading]     = useState(false);
-  const [syncLoading,setSyncLoading] = useState(true);
   const [fileName,setFileName]   = useState("");
   const [toast,setToast]         = useState("");
 
   const mostrarToast = msg => { setToast(msg); setTimeout(()=>setToast(""),2500); };
-
-  // ── Firebase: escuchar cambios en tiempo real ──────────────────────────────
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "envios"), (snapshot) => {
-      const docs = snapshot.docs.map(d => ({ ...d.data(), id: d.id }));
-      docs.sort((a,b) => (b.fechaVenta||b.fecha||"").localeCompare(a.fechaVenta||a.fecha||""));
-      setEnvios(docs);
-      setSyncLoading(false);
-    }, (err) => {
-      console.error(err);
-      setSyncLoading(false);
-    });
-    return () => unsub();
-  }, []);
-
-  // ── Guardar envio en Firebase ──────────────────────────────────────────────
-  const guardarEnvio = async (envio) => {
-    try {
-      await setDoc(doc(db, "envios", envio.id), envio);
-    } catch(e) { console.error("Error guardando:", e); }
-  };
-
-  // ── Eliminar envio de Firebase ─────────────────────────────────────────────
-  const eliminarEnvio = async (id) => {
-    try {
-      await deleteDoc(doc(db, "envios", id));
-    } catch(e) { console.error("Error eliminando:", e); }
-  };
-
-  // ── setEnvios wrapper que sincroniza con Firebase ──────────────────────────
-  const setEnviosSync = useCallback((updater) => {
-    setEnvios(prev => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      // Detectar cambios y sincronizar
-      next.forEach(e => {
-        const old = prev.find(p => p.id === e.id);
-        if (!old || JSON.stringify(old) !== JSON.stringify(e)) {
-          guardarEnvio(e);
-        }
-      });
-      // Detectar eliminados
-      prev.forEach(e => {
-        if (!next.find(n => n.id === e.id)) {
-          eliminarEnvio(e.id);
-        }
-      });
-      return next;
-    });
-  }, []);
 
   const cargarArchivo = useCallback(async (file) => {
     if (!file) return;
@@ -1135,13 +1082,10 @@ export default function App() {
     setLoading(false);
   }, []);
 
-  const confirmarAsignacion = async (asignados) => {
-    // Guardar todos en Firebase
-    for (const e of asignados) {
-      await guardarEnvio(e);
-    }
+  const confirmarAsignacion = asignados => {
+    setEnvios(p => [...asignados, ...p.filter(e => !asignados.find(a => a.id===e.id))]);
     setPantalla("dashboard"); setTab("envios");
-    mostrarToast(asignados.length+" envios guardados");
+    mostrarToast(asignados.length+" envios cargados");
   };
 
   const reasignarSeleccionados = items => {
@@ -1151,20 +1095,43 @@ export default function App() {
   if (pantalla==="asignacion") {
     return <PantallaAsignacion borrador={borrador} fileName={fileName}
       onConfirmar={confirmarAsignacion}
-      onCancelar={()=>setPantalla("dashboard")}/>;
+      onCancelar={()=>setPantalla(envios.length>0?"dashboard":"inicio")}/>;
   }
 
   const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"resumen",l:"Resumen"}];
+
+  if (pantalla==="inicio") {
+    return (
+      <div style={{minHeight:"100vh",background:"#0a0e1a",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"sans-serif",padding:"2rem"}}>
+        <style>{`*{box-sizing:border-box;}`}</style>
+        <div style={{width:"54px",height:"54px",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",borderRadius:"14px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"1.5rem",marginBottom:"1.5rem"}}>🛵</div>
+        <h1 style={{fontWeight:800,fontSize:"1.8rem",margin:"0 0 0.3rem",color:"#fff",textAlign:"center"}}>EnviosHub</h1>
+        <p style={{color:"#6b7280",margin:"0 0 2.5rem",fontSize:"0.95rem"}}>Gestion de envios Flex</p>
+        {error&&<div style={{background:"#1c0a0a",border:"1px solid #7f1d1d",color:"#fca5a5",padding:"0.65rem 1.1rem",borderRadius:"10px",marginBottom:"1.25rem",fontSize:"0.82rem",maxWidth:"380px",textAlign:"center"}}>{error}</div>}
+        <label style={{cursor:"pointer",display:"inline-block",marginBottom:"0.9rem"}}>
+          <input type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={e=>{if(e.target.files[0]){cargarArchivo(e.target.files[0]);e.target.value="";}}}/>
+          <span style={{display:"inline-block",padding:"0.85rem 2rem",borderRadius:"12px",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",fontWeight:700,fontSize:"0.95rem",cursor:"pointer"}}>
+            {loading?"Leyendo...":"Cargar planilla ML"}
+          </span>
+        </label>
+        <p style={{color:"#374151",fontSize:"0.75rem",margin:"0 0 1.25rem"}}>Reporte de ventas Mercado Libre (.xlsx)</p>
+        <div style={{display:"flex",gap:"0.65rem",flexWrap:"wrap",justifyContent:"center"}}>
+          <button onClick={()=>{setPantalla("dashboard");setTab("manual");}} style={{background:"none",border:"1px solid #252d40",borderRadius:"8px",color:"#6b7280",cursor:"pointer",fontSize:"0.8rem",padding:"0.45rem 0.9rem"}}>+ Carga manual</button>
+          <button onClick={()=>{setPantalla("dashboard");setTab("tarifas");}} style={{background:"none",border:"1px solid #252d40",borderRadius:"8px",color:"#6b7280",cursor:"pointer",fontSize:"0.8rem",padding:"0.45rem 0.9rem"}}>Configurar tarifas</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{minHeight:"100vh",background:"#0a0e1a",color:"#fff",fontFamily:"sans-serif"}}>
       <style>{`*{box-sizing:border-box;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:#0a0e1a;}::-webkit-scrollbar-thumb{background:#252d40;border-radius:3px;}select option{background:#1a1f2e;color:#e5e7eb;}button:hover{opacity:0.85;}`}</style>
       {toast&&<div style={{position:"fixed",top:"16px",right:"16px",zIndex:999,background:"#041f14",border:"1px solid #10b981",borderRadius:"10px",padding:"0.6rem 1.1rem",color:"#34d399",fontWeight:700,fontSize:"0.82rem"}}>{toast}</div>}
-      <div style={{position:"sticky",top:0,zIndex:100,background:"#0f1420",borderBottom:"1px solid #1a1f2e",padding:"0.7rem 1rem",display:"flex",alignItems:"center",gap:"0.55rem",flexWrap:"wrap"}}>
+      <div style={{background:"#0f1420",borderBottom:"1px solid #1a1f2e",padding:"0.7rem 1rem",display:"flex",alignItems:"center",gap:"0.55rem",flexWrap:"wrap"}}>
         <div style={{width:"26px",height:"26px",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",borderRadius:"7px",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>🛵</div>
         <div style={{marginRight:"0.2rem"}}>
           <div style={{fontWeight:800,fontSize:"0.92rem"}}>EnviosHub</div>
-          <div style={{color:"#374151",fontSize:"0.58rem"}}>{syncLoading ? "Conectando..." : (envios.length > 0 ? envios.length+" envios" : "Sin envios")}</div>
+          <div style={{color:"#374151",fontSize:"0.58rem"}}>{fileName||"Sin datos"}</div>
         </div>
         <div style={{display:"flex",gap:"3px",flexWrap:"wrap"}}>
           {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{...S.btn(tab===t.id),padding:"0.32rem 0.65rem",fontSize:"0.73rem"}}>{t.l}</button>)}
@@ -1178,9 +1145,9 @@ export default function App() {
       </div>
       <div style={{padding:"0.85rem 1rem",maxWidth:"1400px",margin:"0 auto"}}>
         {error&&<div style={{...S.card,padding:"0.65rem 1rem",marginBottom:"0.8rem",background:"#1c0a0a",border:"1px solid #7f1d1d",color:"#fca5a5",fontSize:"0.8rem"}}>{error}</div>}
-        {tab==="envios"  &&<TabEnvios   envios={envios} setEnvios={setEnviosSync} zonasConfig={zonasConfig} onReasignar={reasignarSeleccionados}/>}
+        {tab==="envios"  &&<TabEnvios   envios={envios} setEnvios={setEnvios} zonasConfig={zonasConfig} onReasignar={reasignarSeleccionados}/>}
         {tab==="imprimir"&&<TabImprimir envios={envios} zonasConfig={zonasConfig}/>}
-        {tab==="manual"  &&<TabManual   setEnvios={setEnviosSync} onSuccess={()=>{setTab("envios");mostrarToast("Envio agregado");}}/>}
+        {tab==="manual"  &&<TabManual   setEnvios={setEnvios} onSuccess={()=>{setTab("envios");mostrarToast("Envio agregado");}}/>}
         {tab==="tarifas" &&<TabTarifas  zonasConfig={zonasConfig} setZonasConfig={setZonasConfig}/>}
         {tab==="resumen" &&<TabResumen  envios={envios} zonasConfig={zonasConfig}/>}
       </div>
