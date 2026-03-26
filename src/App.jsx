@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import * as XLSXLib from "xlsx";
 import { db } from "./firebase.js";
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from "firebase/firestore";
@@ -691,6 +691,219 @@ function TabInforme({envios,zc,lc}){
 }
 
 // ════════════════════════════════════════════════════════════════════
+// TAB MAPA
+// ════════════════════════════════════════════════════════════════════
+const LC_COLOR = {HNOS:"#8b5cf6",CARLOS:"#f59e0b",GUS:"#3b82f6",DELFRAN:"#10b981",SYM:"#ec4899"};
+const TC_COLOR = {AM:"#60a5fa",MD:"#a78bfa",PM:"#f97316",Turbo:"#f472b6"};
+const GEO_CACHE_KEY = "envhub_geocache";
+
+function cargarLeaflet() {
+  return new Promise(resolve => {
+    if (window.L) return resolve();
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+    document.head.appendChild(css);
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+    script.onload = resolve;
+    document.head.appendChild(script);
+  });
+}
+
+async function geocodificar(direccion, cp, ciudad) {
+  const cache = JSON.parse(localStorage.getItem(GEO_CACHE_KEY) || "{}");
+  const key = (direccion + cp).replace(/\s+/g, "").toLowerCase();
+  if (cache[key]) return cache[key];
+  const query = encodeURIComponent(direccion + ", " + (ciudad || "") + ", Buenos Aires, Argentina");
+  try {
+    const res = await fetch("https://nominatim.openstreetmap.org/search?q=" + query + "&format=json&limit=1&countrycodes=ar", {
+      headers: { "Accept-Language": "es", "User-Agent": "EnviosHub/1.2" }
+    });
+    const data = await res.json();
+    if (data && data[0]) {
+      const coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+      cache[key] = coords;
+      localStorage.setItem(GEO_CACHE_KEY, JSON.stringify(cache));
+      return coords;
+    }
+  } catch(e) { /* sin red o error */ }
+  return null;
+}
+
+function TabMapa({ envios, lc }) {
+  const hoy = fechaHoy();
+  const [modFecha, setModFecha] = useState("hoy");
+  const [rangoD, setRangoD] = useState(hoy);
+  const [rangoH, setRangoH] = useState(hoy);
+  const [filTrans, setFilTrans] = useState("TODOS");
+  const [filTurno, setFilTurno] = useState("TODOS");
+  const [modColor, setModColor] = useState("logistica");
+  const [geoData, setGeoData] = useState([]);
+  const [cargando, setCargando] = useState(false);
+  const [progreso, setProgreso] = useState(0);
+  const [total, setTotal] = useState(0);
+  const mapRef = useRef(null);
+  const leafletMap = useRef(null);
+  const markersRef = useRef([]);
+
+  const logActivas = Object.entries(lc).filter(([,v]) => v.activa).map(([k]) => k);
+
+  const getRango = () => {
+    if (modFecha === "todos") return { d: "", h: "" };
+    if (modFecha === "hoy")    return { d: hoy, h: hoy };
+    if (modFecha === "ayer")   return { d: fechaAyer(), h: fechaAyer() };
+    if (modFecha === "semana") return { d: fechaInicioSemana(), h: hoy };
+    return { d: rangoD, h: rangoH };
+  };
+
+  const { d: desde, h: hasta } = getRango();
+
+  const filtrados = envios.filter(e => {
+    const f = e.fecha || e.fechaVenta || "";
+    if (desde && f < desde) return false;
+    if (hasta && f > hasta) return false;
+    if (filTrans !== "TODOS" && e.trans !== filTrans) return false;
+    if (filTurno !== "TODOS" && e.turno !== filTurno) return false;
+    return getEstado(e) !== "cancelado";
+  });
+
+  // Inicializar mapa
+  useEffect(() => {
+    cargarLeaflet().then(() => {
+      if (!mapRef.current || leafletMap.current) return;
+      leafletMap.current = window.L.map(mapRef.current, { center: [-34.62, -58.48], zoom: 10 });
+      window.L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        attribution: "CartoDB", maxZoom: 19
+      }).addTo(leafletMap.current);
+    });
+    return () => {
+      if (leafletMap.current) { leafletMap.current.remove(); leafletMap.current = null; }
+    };
+  }, []);
+
+  // Geocodificar envios filtrados
+  useEffect(() => {
+    if (!filtrados.length) { setGeoData([]); return; }
+    let cancelled = false;
+    const run = async () => {
+      setCargando(true); setProgreso(0); setTotal(filtrados.length);
+      const results = [];
+      for (let i = 0; i < filtrados.length; i++) {
+        if (cancelled) break;
+        const e = filtrados[i];
+        const coords = await geocodificar(e.direccion, e.cp, e.ciudad);
+        if (coords) results.push({ ...e, lat: coords.lat, lng: coords.lng });
+        setProgreso(i + 1);
+        if (i < filtrados.length - 1) await new Promise(r => setTimeout(r, 1100)); // respetar limite Nominatim
+      }
+      if (!cancelled) { setGeoData(results); setCargando(false); }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [filtrados.map(e => e.id + e.trans + e.turno).join(",")]);
+
+  // Renderizar markers
+  useEffect(() => {
+    if (!leafletMap.current || !window.L) return;
+    markersRef.current.forEach(m => leafletMap.current.removeLayer(m));
+    markersRef.current = [];
+    geoData.forEach(e => {
+      const color = modColor === "logistica" ? (LC_COLOR[e.trans] || "#6b7280") : (TC_COLOR[e.turno] || "#6b7280");
+      const icon = window.L.divIcon({
+        html: `<div style="width:13px;height:13px;border-radius:50%;background:${color};border:2px solid rgba(255,255,255,0.4);box-shadow:0 0 5px ${color}88;"></div>`,
+        className: "", iconSize: [13, 13], iconAnchor: [6, 6]
+      });
+      const m = window.L.marker([e.lat, e.lng], { icon }).addTo(leafletMap.current);
+      m.bindPopup(`
+        <div style="font-size:12px;font-weight:700;color:#e5e7eb;margin-bottom:4px;">${e.direccion}</div>
+        <div style="margin-bottom:3px;">
+          <span style="background:${LC_COLOR[e.trans] || "#252d40"}22;color:${LC_COLOR[e.trans] || "#6b7280"};padding:1px 7px;border-radius:4px;font-size:11px;font-weight:700;margin-right:4px;">${e.trans || "Sin asignar"}</span>
+          <span style="background:${TC_COLOR[e.turno] || "#252d40"}22;color:${TC_COLOR[e.turno] || "#6b7280"};padding:1px 7px;border-radius:4px;font-size:11px;font-weight:700;">${e.turno || "-"}</span>
+        </div>
+        <div style="color:#6b7280;font-size:11px;">${e.partido}${e.fecha ? " · " + fmtCorta(e.fecha) : ""}</div>
+      `);
+      markersRef.current.push(m);
+    });
+  }, [geoData, modColor]);
+
+  const pct = total > 0 ? Math.round((progreso / total) * 100) : 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.7rem" }}>
+      {/* Filtros */}
+      <div style={{ ...S.card, padding: "0.65rem 1rem", display: "flex", gap: "0.4rem", flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ color: "#4b5563", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase" }}>Fecha</span>
+        {[{k:"todos",l:"Todos"},{k:"hoy",l:"Hoy"},{k:"ayer",l:"Ayer"},{k:"semana",l:"Semana"},{k:"rango",l:"Rango"}].map(x => (
+          <button key={x.k} onClick={() => setModFecha(x.k)} style={S.btn(modFecha === x.k)}>{x.l}</button>
+        ))}
+        {modFecha === "rango" && <>
+          <input type="date" value={rangoD} onChange={e => setRangoD(e.target.value)} style={{ ...S.input, padding: "4px 8px", width: "132px" }} />
+          <input type="date" value={rangoH} onChange={e => setRangoH(e.target.value)} style={{ ...S.input, padding: "4px 8px", width: "132px" }} />
+        </>}
+        <span style={{ color: "#374151", fontSize: "0.6rem" }}>|</span>
+        {["TODOS", ...logActivas].map(t => <button key={t} onClick={() => setFilTrans(t)} style={S.btnSm(filTrans === t, lc[t]?.color || "#6366f1")}>{t}</button>)}
+        <span style={{ color: "#374151", fontSize: "0.6rem" }}>|</span>
+        {["TODOS", ...TURNOS].map(t => <button key={t} onClick={() => setFilTurno(t)} style={S.btnSm(filTurno === t, "#8b5cf6")}>{t}</button>)}
+        <span style={{ color: "#374151", fontSize: "0.6rem" }}>|</span>
+        <span style={{ color: "#4b5563", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase" }}>Color</span>
+        <button onClick={() => setModColor("logistica")} style={S.btnSm(modColor === "logistica", "#6366f1")}>Logistica</button>
+        <button onClick={() => setModColor("turno")} style={S.btnSm(modColor === "turno", "#8b5cf6")}>Turno</button>
+      </div>
+
+      {/* Barra de progreso geocodificacion */}
+      {cargando && (
+        <div style={{ ...S.card, padding: "0.65rem 1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+            <span style={{ color: "#9ca3af", fontSize: "0.78rem" }}>Geocodificando direcciones... {progreso}/{total}</span>
+            <span style={{ color: "#6366f1", fontSize: "0.78rem", fontWeight: 700 }}>{pct}%</span>
+          </div>
+          <div style={{ background: "#0f1420", borderRadius: "4px", height: "6px", overflow: "hidden" }}>
+            <div style={{ background: "linear-gradient(90deg,#6366f1,#8b5cf6)", height: "100%", width: pct + "%", borderRadius: "4px", transition: "width 0.3s" }} />
+          </div>
+          <div style={{ color: "#4b5563", fontSize: "0.7rem", marginTop: "4px" }}>Las direcciones se guardan en cache — la proxima vez es instantaneo</div>
+        </div>
+      )}
+
+      {/* Info */}
+      {!cargando && (
+        <div style={{ ...S.card, padding: "0.55rem 1rem", display: "flex", gap: "1.25rem", flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ color: "#e5e7eb", fontSize: "0.8rem" }}><span style={{ color: "#6366f1", fontWeight: 700 }}>{geoData.length}</span> envios en mapa</span>
+          {filtrados.length > geoData.length && <span style={{ color: "#6b7280", fontSize: "0.75rem" }}>{filtrados.length - geoData.length} sin coordenadas</span>}
+          {/* Leyenda */}
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginLeft: "auto" }}>
+            {modColor === "logistica"
+              ? logActivas.filter(l => geoData.some(e => e.trans === l)).map(l => (
+                  <div key={l} style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                    <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: LC_COLOR[l] || "#6b7280" }} />
+                    <span style={{ color: "#9ca3af", fontSize: "0.72rem" }}>{l}</span>
+                  </div>
+                ))
+              : TURNOS.filter(t => geoData.some(e => e.turno === t)).map(t => (
+                  <div key={t} style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                    <div style={{ width: "10px", height: "10px", borderRadius: "50%", background: TC_COLOR[t] || "#6b7280" }} />
+                    <span style={{ color: "#9ca3af", fontSize: "0.72rem" }}>{t}</span>
+                  </div>
+                ))
+            }
+          </div>
+        </div>
+      )}
+
+      {/* Mapa */}
+      <div ref={mapRef} style={{ height: "520px", borderRadius: "14px", overflow: "hidden", border: "1px solid #252d40", background: "#0f1420" }} />
+
+      {envios.length === 0 && (
+        <div style={{ textAlign: "center", padding: "3rem", color: "#4b5563" }}>
+          <div style={{ fontSize: "2rem" }}>🗺️</div>
+          <p style={{ marginTop: "0.5rem" }}>Carga un Excel primero</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 // TAB LOCALIDADES — ver, editar y agregar CP → Partido
 // ════════════════════════════════════════════════════════════════════
 const CP_P_INIT = {"1601":"La Plata","1607":"San Isidro","1608":"Tigre","1609":"San Isidro","1610":"Tigre","1611":"Tigre","1612":"Malvinas Argentinas","1613":"Malvinas Argentinas","1614":"Malvinas Argentinas","1615":"Malvinas Argentinas","1616":"Malvinas Argentinas","1617":"Tigre","1618":"Tigre","1619":"Escobar","1620":"Escobar","1621":"Tigre","1622":"Escobar","1623":"Escobar","1624":"Tigre","1625":"Escobar","1626":"Escobar","1627":"Escobar","1628":"Escobar","1629":"Pilar","1630":"Pilar","1631":"Pilar","1632":"Pilar","1633":"Pilar","1634":"Pilar","1635":"Pilar","1636":"Vicente Lopez","1637":"Vicente Lopez","1638":"Vicente Lopez","1640":"San Isidro","1641":"San Isidro","1642":"San Isidro","1643":"San Isidro","1644":"San Fernando","1645":"San Fernando","1646":"San Fernando","1647":"Zarate","1648":"Tigre","1649":"San Fernando","1650":"San Martin","1651":"San Martin","1653":"San Martin","1655":"San Martin","1657":"San Martin","1659":"San Miguel","1660":"Jose C Paz","1661":"San Miguel","1662":"San Miguel","1663":"San Miguel","1664":"Pilar","1665":"Jose C Paz","1666":"Jose C Paz","1667":"Pilar","1669":"Pilar","1670":"Tigre","1671":"Tigre","1672":"San Martin","1674":"Tres de Febrero","1675":"Tres de Febrero","1676":"Tres de Febrero","1678":"Tres de Febrero","1682":"Tres de Febrero","1683":"Tres de Febrero","1684":"Moron","1685":"Moron","1686":"Hurlingham","1687":"Tres de Febrero","1688":"Hurlingham","1689":"La Matanza Norte","1692":"Tres de Febrero","1702":"Tres de Febrero","1703":"Tres de Febrero","1704":"La Matanza Norte","1706":"Moron","1707":"Moron","1708":"Moron","1712":"Moron","1713":"Ituzaingo","1714":"Ituzaingo","1715":"Ituzaingo","1716":"Merlo","1718":"Merlo","1721":"Merlo","1722":"Merlo","1723":"Merlo","1724":"Merlo","1727":"Marcos Paz","1736":"Moreno","1738":"Moreno","1740":"Moreno","1742":"Moreno","1743":"Moreno","1744":"Moreno","1745":"Moreno","1746":"Moreno","1748":"Gral. Rodriguez","1749":"Gral. Rodriguez","1751":"La Matanza Norte","1752":"La Matanza Norte","1753":"La Matanza Norte","1754":"La Matanza Norte","1755":"La Matanza Norte","1757":"La Matanza Sur","1758":"La Matanza Sur","1759":"La Matanza Sur","1761":"La Matanza Norte","1763":"La Matanza Sur","1764":"La Matanza Sur","1765":"La Matanza Sur","1766":"La Matanza Norte","1768":"La Matanza Norte","1770":"La Matanza Norte","1771":"La Matanza Norte","1772":"La Matanza Norte","1774":"La Matanza Norte","1778":"La Matanza Norte","1785":"La Matanza Norte","1786":"La Matanza Sur","1801":"Ezeiza","1802":"Ezeiza","1803":"Ezeiza","1804":"Ezeiza","1805":"Esteban Echeverria","1806":"Ezeiza","1807":"Ezeiza","1808":"Canuelas","1812":"Canuelas","1813":"Ezeiza","1814":"Canuelas","1815":"Canuelas","1816":"Canuelas","1821":"Lomas de Zamora","1822":"Lanus","1823":"Lanus","1824":"Lanus","1825":"Lanus","1826":"Lanus","1827":"Lomas de Zamora","1828":"Lomas de Zamora","1829":"Lomas de Zamora","1831":"Lomas de Zamora","1832":"Lomas de Zamora","1833":"Lomas de Zamora","1834":"Lomas de Zamora","1835":"Lomas de Zamora","1836":"Lomas de Zamora","1837":"Berazategui","1838":"Esteban Echeverria","1839":"Esteban Echeverria","1840":"Quilmes","1841":"Esteban Echeverria","1842":"Esteban Echeverria","1843":"Almirante Brown","1844":"Almirante Brown","1845":"Almirante Brown","1846":"Almirante Brown","1847":"Almirante Brown","1848":"Almirante Brown","1849":"Almirante Brown","1851":"Almirante Brown","1852":"Almirante Brown","1853":"Florencio Varela","1854":"Almirante Brown","1855":"Almirante Brown","1856":"Almirante Brown","1858":"Presidente Peron","1859":"Florencio Varela","1860":"Berazategui","1861":"Berazategui","1862":"Presidente Peron","1863":"Florencio Varela","1864":"San Vicente","1865":"San Vicente","1867":"Florencio Varela","1868":"Avellaneda","1869":"Avellaneda","1870":"Avellaneda","1871":"Avellaneda","1872":"Avellaneda","1873":"Avellaneda","1874":"Avellaneda","1875":"Avellaneda","1876":"Quilmes","1877":"Quilmes","1878":"Quilmes","1879":"Quilmes","1880":"Berazategui","1881":"Quilmes","1882":"Quilmes","1883":"Quilmes","1884":"Berazategui","1885":"Berazategui","1886":"Berazategui","1887":"Florencio Varela","1888":"Florencio Varela","1889":"Florencio Varela","1890":"Berazategui","1891":"Florencio Varela","1893":"Berazategui","1894":"La Plata","1895":"La Plata","1896":"La Plata","1897":"La Plata","1900":"La Plata","1901":"La Plata","1902":"La Plata","1903":"La Plata","1904":"La Plata","1905":"La Plata","1906":"La Plata","1907":"La Plata","1908":"La Plata","1909":"La Plata","1910":"La Plata","1912":"La Plata","1914":"La Plata","1923":"Berisso","1924":"Berisso","1925":"Ensenada","1926":"Ensenada","1927":"Ensenada","1929":"Berisso","1931":"Ensenada","1984":"San Vicente","2800":"Zarate","2801":"Zarate","2802":"Zarate","2804":"Campana","2805":"Campana","2806":"Zarate","2808":"Zarate","2812":"Campana","2814":"Ex.de la Cruz","2816":"Campana","6700":"Lujan","6701":"Lujan","6702":"Lujan","6703":"Ex.de la Cruz","6706":"Lujan","6708":"Lujan","6712":"Lujan"};
@@ -868,7 +1081,7 @@ export default function App(){
 
   if(pantalla==="asignacion"){return<PantallaAsignacion borrador={borrador} fileName={fileName} onConfirmar={confirmarAsignacion} onCancelar={()=>setPantalla("dashboard")} lc={lc}/>;}
 
-  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"},{id:"localidades",l:"Localidades"}];
+  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"},{id:"mapa",l:"Mapa"},{id:"localidades",l:"Localidades"}];
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0e1a",color:"#fff",fontFamily:"sans-serif"}}>
@@ -895,6 +1108,7 @@ export default function App(){
         {tab==="manual"  &&<TabManual   setEnvios={setEnvios} onSuccess={()=>{setTab("envios");mostrarToast("Envio agregado");}} lc={lc} enviosExistentes={envios}/>}
         {tab==="tarifas" &&<TabTarifas  zc={zc} setZc={setZc} lc={lc} setLc={setLc}/>}
         {tab==="informe"  &&<TabInforme  envios={envios} zc={zc} lc={lc}/>}
+        {tab==="mapa"     &&<TabMapa     envios={envios} lc={lc}/>}
         {tab==="localidades"&&<TabLocalidades/>}
       </div>
     </div>
