@@ -1081,7 +1081,7 @@ export default function App(){
 
   if(pantalla==="asignacion"){return<PantallaAsignacion borrador={borrador} fileName={fileName} onConfirmar={confirmarAsignacion} onCancelar={()=>setPantalla("dashboard")} lc={lc}/>;}
 
-  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"},{id:"mapa",l:"Mapa"},{id:"localidades",l:"Localidades"}];
+  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"},{id:"localidades",l:"Localidades"}];
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0e1a",color:"#fff",fontFamily:"sans-serif"}}>
@@ -1108,7 +1108,6 @@ export default function App(){
         {tab==="manual"  &&<TabManual   setEnvios={setEnvios} onSuccess={()=>{setTab("envios");mostrarToast("Envio agregado");}} lc={lc} enviosExistentes={envios}/>}
         {tab==="tarifas" &&<TabTarifas  zc={zc} setZc={setZc} lc={lc} setLc={setLc}/>}
         {tab==="informe"  &&<TabInforme  envios={envios} zc={zc} lc={lc}/>}
-        {tab==="mapa"     &&<TabMapa     envios={envios} lc={lc}/>}
         {tab==="localidades"&&<TabLocalidades/>}
       </div>
     </div>
