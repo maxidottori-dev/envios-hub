@@ -3,7 +3,14 @@ import * as XLSXLib from "xlsx";
 import { db } from "./firebase.js";
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from "firebase/firestore";
 
-const VERSION = "1.1";
+const VERSION = "1.2";
+
+// Estado derivado: si tiene trans asignado = asignado, si fue cancelado = cancelado, sino = sin_asignar
+function getEstado(e) {
+  if (e.estado === "cancelado") return "cancelado";
+  if (e.trans) return "asignado";
+  return "sin_asignar";
+}
 
 function cargarXLSX() { return Promise.resolve(XLSXLib); }
 
@@ -291,32 +298,45 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
   const tmap=buildTarifaMap(zc);
   const getImp=e=>calcImp(e,tmap,lc);
   const logActivas=Object.entries(lc).filter(([,v])=>v.activa).map(([k])=>k);
-  const getRango=()=>{if(modFecha==="hoy")return{d:hoy,h:hoy};if(modFecha==="ayer")return{d:fechaAyer(),h:fechaAyer()};if(modFecha==="semana")return{d:fechaInicioSemana(),h:hoy};return{d:rangoD,h:rangoH};};
+  const getRango=()=>{
+    if(modFecha==="todos") return{d:"",h:""};
+    if(modFecha==="hoy")    return{d:hoy,h:hoy};
+    if(modFecha==="ayer")   return{d:fechaAyer(),h:fechaAyer()};
+    if(modFecha==="semana") return{d:fechaInicioSemana(),h:hoy};
+    return{d:rangoD,h:rangoH};
+  };
   const{d:desde,h:hasta}=getRango();
   const filtrados=envios.filter(e=>{
-    const f=e.fecha||e.fechaVenta||"";if(f<desde||f>hasta)return false;
+    const f=e.fecha||e.fechaVenta||"";
+    if(desde&&f<desde)return false;
+    if(hasta&&f>hasta)return false;
     if(filTrans==="SIN ASIGNAR"&&e.trans)return false;
     if(filTrans!=="TODOS"&&filTrans!=="SIN ASIGNAR"&&e.trans!==filTrans)return false;
-    if(filEstado!=="TODOS"&&e.estado!==filEstado)return false;
+    const est=getEstado(e);
+    if(filEstado!=="TODOS"&&est!==filEstado)return false;
     if(filZona!=="TODAS"&&getZonaML(e.partido)!==filZona)return false;
     if(filTurno!=="TODOS"&&e.turno!==filTurno)return false;
     if(busqueda){const q=busqueda.toLowerCase();return e.direccion.toLowerCase().includes(q)||e.id.includes(q)||e.partido.toLowerCase().includes(q)||(e.nroSeguimiento||"").includes(q);}
     return true;
   });
-  const activos=filtrados.filter(e=>e.estado!=="cancelado");
+  const activos=filtrados.filter(e=>getEstado(e)!=="cancelado");
   const totalImp=activos.reduce((s,e)=>s+getImp(e),0);
-  const sinAsig=envios.filter(e=>{const f=e.fecha||e.fechaVenta||"";return f>=desde&&f<=hasta&&e.estado==="sin_asignar";}).length;
+  const sinAsig=filtrados.filter(e=>getEstado(e)==="sin_asignar").length;
   const porTrans=logActivas.map(l=>({l,n:activos.filter(e=>e.trans===l).length,v:activos.filter(e=>e.trans===l).reduce((s,e)=>s+getImp(e),0)})).filter(x=>x.n>0);
   const toggleSel=id=>setSeleccionados(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
-  const saveEnvio=updated=>{setEnvios(p=>p.map(e=>e.id===updated.id?updated:e));setEditId(null);};
+  const saveEnvio=updated=>{setEnvios(p=>p.map(e=>e.id===updated.id?{...updated,estado:getEstado(updated)}:e));setEditId(null);};
   const eliminar=id=>{if(window.confirm("Eliminar este envio?"))setEnvios(p=>p.filter(e=>e.id!==id));};
+  const eliminarSel=()=>{if(!window.confirm(`Eliminar ${seleccionados.size} envio(s)?`))return;setEnvios(p=>p.filter(e=>!seleccionados.has(e.id)));setSeleccionados(new Set());setModoSel(false);};
   const reasignarSel=()=>{const items=envios.filter(e=>seleccionados.has(e.id));onReasignar(items);setSeleccionados(new Set());setModoSel(false);};
+  const cancelarSel=()=>{if(!window.confirm(`Cancelar ${seleccionados.size} envio(s)?`))return;setEnvios(p=>p.map(e=>seleccionados.has(e.id)?{...e,estado:"cancelado"}:e));setSeleccionados(new Set());setModoSel(false);};
+  // Filtrar por logistica al hacer clic en card
+  const filtrarPorLogistica=l=>{setFilTrans(filTrans===l?"TODOS":l);};
   return(
     <div>
       <div style={{...S.card,padding:"0.65rem 1rem",marginBottom:"0.7rem"}}>
         <div style={{display:"flex",gap:"4px",flexWrap:"wrap",alignItems:"center",marginBottom:modFecha==="rango"?"0.5rem":"0"}}>
           <span style={{color:"#4b5563",fontSize:"0.65rem",fontWeight:700,textTransform:"uppercase",marginRight:"4px"}}>Fecha</span>
-          {[{k:"hoy",l:"Hoy"},{k:"ayer",l:"Ayer"},{k:"semana",l:"Esta semana"},{k:"rango",l:"Rango"}].map(x=><button key={x.k} onClick={()=>setModFecha(x.k)} style={S.btn(modFecha===x.k)}>{x.l}</button>)}
+          {[{k:"todos",l:"Todos"},{k:"hoy",l:"Hoy"},{k:"ayer",l:"Ayer"},{k:"semana",l:"Esta semana"},{k:"rango",l:"Rango"}].map(x=><button key={x.k} onClick={()=>setModFecha(x.k)} style={S.btn(modFecha===x.k)}>{x.l}</button>)}
         </div>
         {modFecha==="rango"&&<div style={{display:"flex",gap:"0.5rem",alignItems:"center",flexWrap:"wrap"}}>
           <span style={{color:"#6b7280",fontSize:"0.8rem"}}>Desde</span>
@@ -328,8 +348,8 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"0.55rem",marginBottom:"0.7rem"}}>
         <div style={{...S.card,padding:"0.75rem 1rem"}}><div style={{color:"#6366f1",fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{filtrados.length}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Envios</div></div>
         <div style={{...S.card,padding:"0.75rem 1rem"}}><div style={{color:"#10b981",fontWeight:800,fontSize:"1.05rem"}}>{fmt(totalImp)}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Total</div></div>
-        {sinAsig>0&&<div style={{...S.card,padding:"0.75rem 1rem",borderLeft:"3px solid #f59e0b"}}><div style={{color:"#f59e0b",fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{sinAsig}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Sin asignar</div></div>}
-        {porTrans.map(({l,n,v})=><div key={l} style={{...S.card,padding:"0.75rem 1rem",borderLeft:"3px solid "+lc[l].color}}><div style={{color:lc[l].color,fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{n}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>{l}</div><div style={{color:"#10b981",fontSize:"0.72rem",fontWeight:600,marginTop:"2px"}}>{fmt(v)}</div></div>)}
+        {sinAsig>0&&<div onClick={()=>setFilEstado(filEstado==="sin_asignar"?"TODOS":"sin_asignar")} style={{...S.card,padding:"0.75rem 1rem",borderLeft:"3px solid #f59e0b",cursor:"pointer",opacity:filEstado==="sin_asignar"?1:0.75}}><div style={{color:"#f59e0b",fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{sinAsig}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Sin asignar</div></div>}
+        {porTrans.map(({l,n,v})=><div key={l} onClick={()=>filtrarPorLogistica(l)} style={{...S.card,padding:"0.75rem 1rem",borderLeft:"3px solid "+lc[l].color,cursor:"pointer",opacity:filTrans===l?1:0.75,outline:filTrans===l?"2px solid "+lc[l].color:"none"}}><div style={{color:lc[l].color,fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{n}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>{l}</div><div style={{color:"#10b981",fontSize:"0.72rem",fontWeight:600,marginTop:"2px"}}>{fmt(v)}</div></div>)}
       </div>
       <div style={{...S.card,padding:"0.6rem 1rem",marginBottom:"0.7rem",display:"flex",gap:"0.4rem",flexWrap:"wrap",alignItems:"center"}}>
         <input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="Buscar..." style={{...S.input,width:"180px"}}/>
@@ -342,8 +362,8 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
         <span style={{color:"#374151",fontSize:"0.6rem"}}>|</span>
         {["TODOS","sin_asignar","asignado","cancelado"].map(k=><button key={k} onClick={()=>setFilEstado(k)} style={S.btnSm(filEstado===k,ESTADO_C[k]?.t||"#6366f1")}>{ESTADO_C[k]?.label||"Todos"}</button>)}
         <span style={{color:"#374151",fontSize:"0.6rem"}}>|</span>
-        <button onClick={()=>{setModoSel(!modoSel);if(modoSel)setSeleccionados(new Set());}} style={S.btnSm(modoSel,"#6366f1")}>{modoSel?"Cancelar":"Seleccionar"}</button>
-        {modoSel&&<button onClick={()=>setSeleccionados(new Set(filtrados.map(e=>e.id)))} style={S.btnSm(false)}>Todos</button>}
+        <button onClick={()=>{setModoSel(!modoSel);if(modoSel)setSeleccionados(new Set());}} style={S.btnSm(modoSel,"#6366f1")}>{modoSel?"Cancelar seleccion":"Seleccionar"}</button>
+        {modoSel&&<button onClick={()=>setSeleccionados(new Set(filtrados.map(e=>e.id)))} style={S.btnSm(false)}>Todos ({filtrados.length})</button>}
         {modoSel&&seleccionados.size>0&&<button onClick={()=>setSeleccionados(new Set())} style={S.btnSm(false)}>Ninguno</button>}
       </div>
       <div style={{display:"grid",gap:"4px",paddingBottom:"80px"}}>
@@ -354,10 +374,11 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
           const isEdit=editId===e.id;
           const isSel=seleccionados.has(e.id);
           const imp=getImp(e);
-          const estC=ESTADO_C[e.estado]||ESTADO_C.sin_asignar;
+          const estKey=getEstado(e);
+          const estC=ESTADO_C[estKey]||ESTADO_C.sin_asignar;
           return(
             <div key={e.id}>
-              <div style={{...S.card,padding:"0.55rem 0.75rem",display:"flex",alignItems:"flex-start",gap:"0.5rem",opacity:e.estado==="cancelado"?0.45:1,borderColor:isEdit||isSel?"#6366f1":"#252d40",background:isSel?"#12172a":"#1a1f2e"}}>
+              <div style={{...S.card,padding:"0.55rem 0.75rem",display:"flex",alignItems:"flex-start",gap:"0.5rem",opacity:getEstado(e)==="cancelado"?0.45:1,borderColor:isEdit||isSel?"#6366f1":"#252d40",background:isSel?"#12172a":"#1a1f2e"}}>
                 {modoSel?<div style={{paddingTop:"2px"}}><Chk checked={isSel} onChange={()=>toggleSel(e.id)}/></div>:<span style={{color:"#374151",fontSize:"0.65rem",minWidth:"20px",textAlign:"right",paddingTop:"3px"}}>{i+1}</span>}
                 <div style={{flex:1,cursor:"pointer",minWidth:0}} onClick={()=>{if(modoSel)toggleSel(e.id);else setEditId(isEdit?null:e.id);}}>
                   <div style={{display:"flex",gap:"3px",flexWrap:"wrap",alignItems:"center",marginBottom:"3px"}}>
@@ -372,7 +393,7 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
                     {e.cambio!==null&&<Bdg label="Cambio" bg="#1c0514" t="#ec4899"/>}
                     {e.retiro!==null&&<Bdg label="Retiro" bg="#1c1000" t="#f97316"/>}
                   </div>
-                  <div style={{color:"#e5e7eb",fontSize:"0.8rem",lineHeight:1.35,textDecoration:e.estado==="cancelado"?"line-through":"none",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.direccion}</div>
+                  <div style={{color:"#e5e7eb",fontSize:"0.8rem",lineHeight:1.35,textDecoration:getEstado(e)==="cancelado"?"line-through":"none",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.direccion}</div>
                   <div style={{color:"#374151",fontSize:"0.66rem",marginTop:"1px",display:"flex",gap:"6px",flexWrap:"wrap",alignItems:"center"}}>
                     <span style={{fontFamily:"monospace"}}>...{e.id.slice(-10)}</span>
                     {e.nroSeguimiento&&<span style={{background:"#0f1420",padding:"0 5px",borderRadius:"4px",border:"1px solid #252d40",color:"#9ca3af"}}>📦 {e.nroSeguimiento}</span>}
@@ -394,10 +415,12 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
         })}
       </div>
       {modoSel&&seleccionados.size>0&&(
-        <div style={{position:"fixed",bottom:"20px",left:"50%",transform:"translateX(-50%)",background:"#1a1f2e",border:"1px solid #6366f1",borderRadius:"12px",padding:"0.7rem 1.25rem",display:"flex",gap:"0.75rem",alignItems:"center",zIndex:50,boxShadow:"0 4px 20px rgba(0,0,0,0.5)"}}>
+        <div style={{position:"fixed",bottom:"20px",left:"50%",transform:"translateX(-50%)",background:"#1a1f2e",border:"1px solid #6366f1",borderRadius:"12px",padding:"0.7rem 1.25rem",display:"flex",gap:"0.75rem",alignItems:"center",zIndex:50,boxShadow:"0 4px 20px rgba(0,0,0,0.5)",flexWrap:"wrap"}}>
           <span style={{color:"#e5e7eb",fontWeight:700,fontSize:"0.9rem"}}>{seleccionados.size} seleccionados</span>
           <button onClick={reasignarSel} style={{...S.btn(true),background:"linear-gradient(135deg,#6366f1,#8b5cf6)",padding:"0.45rem 1.1rem"}}>Reasignar</button>
-          <button onClick={()=>{setModoSel(false);setSeleccionados(new Set());}} style={S.btn(false)}>Cancelar</button>
+          <button onClick={cancelarSel} style={{...S.btn(true),background:"#7f1d1d",padding:"0.45rem 1.1rem"}}>Cancelar envios</button>
+          <button onClick={eliminarSel} style={{...S.btn(true),background:"#450a0a",padding:"0.45rem 1.1rem",color:"#fca5a5"}}>Eliminar</button>
+          <button onClick={()=>{setModoSel(false);setSeleccionados(new Set());}} style={S.btn(false)}>Salir</button>
         </div>
       )}
     </div>
