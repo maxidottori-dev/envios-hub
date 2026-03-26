@@ -346,7 +346,7 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
         </div>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:"0.55rem",marginBottom:"0.7rem"}}>
-        <div style={{...S.card,padding:"0.75rem 1rem"}}><div style={{color:"#6366f1",fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{filtrados.length}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Envios</div></div>
+        <div onClick={()=>{setFilTrans("TODOS");setFilEstado("TODOS");}} style={{...S.card,padding:"0.75rem 1rem",cursor:"pointer",borderLeft:(filTrans==="TODOS"&&filEstado==="TODOS")?"3px solid #6366f1":"3px solid transparent"}}><div style={{color:"#6366f1",fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{filtrados.length}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Todos</div></div>
         <div style={{...S.card,padding:"0.75rem 1rem"}}><div style={{color:"#10b981",fontWeight:800,fontSize:"1.05rem"}}>{fmt(totalImp)}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Total</div></div>
         {sinAsig>0&&<div onClick={()=>setFilEstado(filEstado==="sin_asignar"?"TODOS":"sin_asignar")} style={{...S.card,padding:"0.75rem 1rem",borderLeft:"3px solid #f59e0b",cursor:"pointer",opacity:filEstado==="sin_asignar"?1:0.75}}><div style={{color:"#f59e0b",fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{sinAsig}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>Sin asignar</div></div>}
         {porTrans.map(({l,n,v})=><div key={l} onClick={()=>filtrarPorLogistica(l)} style={{...S.card,padding:"0.75rem 1rem",borderLeft:"3px solid "+lc[l].color,cursor:"pointer",opacity:filTrans===l?1:0.75,outline:filTrans===l?"2px solid "+lc[l].color:"none"}}><div style={{color:lc[l].color,fontWeight:800,fontSize:"1.8rem",lineHeight:1}}>{n}</div><div style={{color:"#6b7280",fontSize:"0.62rem",marginTop:"2px"}}>{l}</div><div style={{color:"#10b981",fontSize:"0.72rem",fontWeight:600,marginTop:"2px"}}>{fmt(v)}</div></div>)}
@@ -690,6 +690,133 @@ function TabInforme({envios,zc,lc}){
   );
 }
 
+// ════════════════════════════════════════════════════════════════════
+// TAB LOCALIDADES — ver, editar y agregar CP → Partido
+// ════════════════════════════════════════════════════════════════════
+const CP_P_INIT = {"1601":"La Plata","1607":"San Isidro","1608":"Tigre","1609":"San Isidro","1610":"Tigre","1611":"Tigre","1612":"Malvinas Argentinas","1613":"Malvinas Argentinas","1614":"Malvinas Argentinas","1615":"Malvinas Argentinas","1616":"Malvinas Argentinas","1617":"Tigre","1618":"Tigre","1619":"Escobar","1620":"Escobar","1621":"Tigre","1622":"Escobar","1623":"Escobar","1624":"Tigre","1625":"Escobar","1626":"Escobar","1627":"Escobar","1628":"Escobar","1629":"Pilar","1630":"Pilar","1631":"Pilar","1632":"Pilar","1633":"Pilar","1634":"Pilar","1635":"Pilar","1636":"Vicente Lopez","1637":"Vicente Lopez","1638":"Vicente Lopez","1640":"San Isidro","1641":"San Isidro","1642":"San Isidro","1643":"San Isidro","1644":"San Fernando","1645":"San Fernando","1646":"San Fernando","1647":"Zarate","1648":"Tigre","1649":"San Fernando","1650":"San Martin","1651":"San Martin","1653":"San Martin","1655":"San Martin","1657":"San Martin","1659":"San Miguel","1660":"Jose C Paz","1661":"San Miguel","1662":"San Miguel","1663":"San Miguel","1664":"Pilar","1665":"Jose C Paz","1666":"Jose C Paz","1667":"Pilar","1669":"Pilar","1670":"Tigre","1671":"Tigre","1672":"San Martin","1674":"Tres de Febrero","1675":"Tres de Febrero","1676":"Tres de Febrero","1678":"Tres de Febrero","1682":"Tres de Febrero","1683":"Tres de Febrero","1684":"Moron","1685":"Moron","1686":"Hurlingham","1687":"Tres de Febrero","1688":"Hurlingham","1689":"La Matanza Norte","1692":"Tres de Febrero","1702":"Tres de Febrero","1703":"Tres de Febrero","1704":"La Matanza Norte","1706":"Moron","1707":"Moron","1708":"Moron","1712":"Moron","1713":"Ituzaingo","1714":"Ituzaingo","1715":"Ituzaingo","1716":"Merlo","1718":"Merlo","1721":"Merlo","1722":"Merlo","1723":"Merlo","1724":"Merlo","1727":"Marcos Paz","1736":"Moreno","1738":"Moreno","1740":"Moreno","1742":"Moreno","1743":"Moreno","1744":"Moreno","1745":"Moreno","1746":"Moreno","1748":"Gral. Rodriguez","1749":"Gral. Rodriguez","1751":"La Matanza Norte","1752":"La Matanza Norte","1753":"La Matanza Norte","1754":"La Matanza Norte","1755":"La Matanza Norte","1757":"La Matanza Sur","1758":"La Matanza Sur","1759":"La Matanza Sur","1761":"La Matanza Norte","1763":"La Matanza Sur","1764":"La Matanza Sur","1765":"La Matanza Sur","1766":"La Matanza Norte","1768":"La Matanza Norte","1770":"La Matanza Norte","1771":"La Matanza Norte","1772":"La Matanza Norte","1774":"La Matanza Norte","1778":"La Matanza Norte","1785":"La Matanza Norte","1786":"La Matanza Sur","1801":"Ezeiza","1802":"Ezeiza","1803":"Ezeiza","1804":"Ezeiza","1805":"Esteban Echeverria","1806":"Ezeiza","1807":"Ezeiza","1808":"Canuelas","1812":"Canuelas","1813":"Ezeiza","1814":"Canuelas","1815":"Canuelas","1816":"Canuelas","1821":"Lomas de Zamora","1822":"Lanus","1823":"Lanus","1824":"Lanus","1825":"Lanus","1826":"Lanus","1827":"Lomas de Zamora","1828":"Lomas de Zamora","1829":"Lomas de Zamora","1831":"Lomas de Zamora","1832":"Lomas de Zamora","1833":"Lomas de Zamora","1834":"Lomas de Zamora","1835":"Lomas de Zamora","1836":"Lomas de Zamora","1837":"Berazategui","1838":"Esteban Echeverria","1839":"Esteban Echeverria","1840":"Quilmes","1841":"Esteban Echeverria","1842":"Esteban Echeverria","1843":"Almirante Brown","1844":"Almirante Brown","1845":"Almirante Brown","1846":"Almirante Brown","1847":"Almirante Brown","1848":"Almirante Brown","1849":"Almirante Brown","1851":"Almirante Brown","1852":"Almirante Brown","1853":"Florencio Varela","1854":"Almirante Brown","1855":"Almirante Brown","1856":"Almirante Brown","1858":"Presidente Peron","1859":"Florencio Varela","1860":"Berazategui","1861":"Berazategui","1862":"Presidente Peron","1863":"Florencio Varela","1864":"San Vicente","1865":"San Vicente","1867":"Florencio Varela","1868":"Avellaneda","1869":"Avellaneda","1870":"Avellaneda","1871":"Avellaneda","1872":"Avellaneda","1873":"Avellaneda","1874":"Avellaneda","1875":"Avellaneda","1876":"Quilmes","1877":"Quilmes","1878":"Quilmes","1879":"Quilmes","1880":"Berazategui","1881":"Quilmes","1882":"Quilmes","1883":"Quilmes","1884":"Berazategui","1885":"Berazategui","1886":"Berazategui","1887":"Florencio Varela","1888":"Florencio Varela","1889":"Florencio Varela","1890":"Berazategui","1891":"Florencio Varela","1893":"Berazategui","1894":"La Plata","1895":"La Plata","1896":"La Plata","1897":"La Plata","1900":"La Plata","1901":"La Plata","1902":"La Plata","1903":"La Plata","1904":"La Plata","1905":"La Plata","1906":"La Plata","1907":"La Plata","1908":"La Plata","1909":"La Plata","1910":"La Plata","1912":"La Plata","1914":"La Plata","1923":"Berisso","1924":"Berisso","1925":"Ensenada","1926":"Ensenada","1927":"Ensenada","1929":"Berisso","1931":"Ensenada","1984":"San Vicente","2800":"Zarate","2801":"Zarate","2802":"Zarate","2804":"Campana","2805":"Campana","2806":"Zarate","2808":"Zarate","2812":"Campana","2814":"Ex.de la Cruz","2816":"Campana","6700":"Lujan","6701":"Lujan","6702":"Lujan","6703":"Ex.de la Cruz","6706":"Lujan","6708":"Lujan","6712":"Lujan"};
+
+function TabLocalidades() {
+  const [tabla, setTabla] = useState(() => {
+    const stored = localStorage.getItem("envhub_cp_extra");
+    const extra = stored ? JSON.parse(stored) : {};
+    return { ...CP_P_INIT, ...extra };
+  });
+  const [busqueda, setBusqueda] = useState("");
+  const [editCP, setEditCP] = useState(null);
+  const [editVal, setEditVal] = useState("");
+  const [newCP, setNewCP] = useState("");
+  const [newPartido, setNewPartido] = useState("");
+  const [toast, setToast] = useState("");
+
+  const mostrarToast = msg => { setToast(msg); setTimeout(() => setToast(""), 2000); };
+
+  const partidos = [...new Set(Object.values(tabla))].sort();
+
+  const filas = Object.entries(tabla)
+    .filter(([cp, p]) => {
+      if (!busqueda) return true;
+      const q = busqueda.toLowerCase();
+      return cp.includes(q) || p.toLowerCase().includes(q);
+    })
+    .sort(([a], [b]) => parseInt(a) - parseInt(b));
+
+  const guardar = (cp, partido) => {
+    const nueva = { ...tabla, [cp]: partido };
+    setTabla(nueva);
+    // Guardar extras (los que no estan en el init)
+    const extra = {};
+    Object.entries(nueva).forEach(([k, v]) => { if (CP_P_INIT[k] !== v) extra[k] = v; });
+    localStorage.setItem("envhub_cp_extra", JSON.stringify(extra));
+    // Actualizar el mapa global en runtime
+    CP_P[cp] = partido;
+    setEditCP(null);
+    mostrarToast("Guardado");
+  };
+
+  const eliminar = (cp) => {
+    if (!window.confirm("Eliminar CP " + cp + "?")) return;
+    const nueva = { ...tabla };
+    delete nueva[cp];
+    setTabla(nueva);
+    const extra = {};
+    Object.entries(nueva).forEach(([k, v]) => { if (CP_P_INIT[k] !== v) extra[k] = v; });
+    localStorage.setItem("envhub_cp_extra", JSON.stringify(extra));
+    delete CP_P[cp];
+    mostrarToast("Eliminado");
+  };
+
+  const agregar = () => {
+    if (!newCP.trim() || !newPartido.trim()) return;
+    guardar(newCP.trim(), newPartido.trim());
+    setNewCP(""); setNewPartido("");
+  };
+
+  return (
+    <div style={{ maxWidth: "700px" }}>
+      {toast && <div style={{ ...S.card, padding: "0.5rem 1rem", marginBottom: "0.75rem", background: "#041f14", border: "1px solid #10b981", color: "#34d399", fontSize: "0.82rem" }}>{toast}</div>}
+      <div style={{ ...S.card, padding: "0.75rem 1rem", marginBottom: "0.9rem" }}>
+        <div style={{ color: "#6b7280", fontSize: "0.72rem", marginBottom: "0.5rem" }}>
+          La app detecta el partido automaticamente a partir del codigo postal. Si hay un CP que no esta o esta mal asignado, lo podes corregir aca.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "100px 1fr auto", gap: "0.5rem", alignItems: "center" }}>
+          <input value={newCP} onChange={e => setNewCP(e.target.value)} style={{ ...S.input, width: "100%" }} placeholder="CP (ej. 1900)" />
+          <input value={newPartido} onChange={e => setNewPartido(e.target.value)} style={{ ...S.input, width: "100%" }} placeholder="Partido (ej. La Plata)" list="partidos-list" />
+          <datalist id="partidos-list">{partidos.map(p => <option key={p} value={p} />)}</datalist>
+          <button onClick={agregar} style={{ ...S.btn(true), background: "linear-gradient(135deg,#6366f1,#8b5cf6)", whiteSpace: "nowrap" }}>+ Agregar</button>
+        </div>
+      </div>
+
+      <div style={{ ...S.card, padding: "0.65rem 1rem", marginBottom: "0.75rem" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por CP o partido..." style={{ ...S.input, width: "100%" }} />
+      </div>
+
+      <div style={{ ...S.card, overflow: "auto" }}>
+        <div style={{ padding: "0.5rem 1rem", borderBottom: "1px solid #252d40", display: "flex", gap: "0", color: "#6b7280", fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <span style={{ width: "90px" }}>CP</span>
+          <span style={{ flex: 1 }}>Partido</span>
+          <span style={{ width: "80px" }}>Zona ML</span>
+          <span style={{ width: "80px" }}></span>
+        </div>
+        {filas.map(([cp, partido], i) => {
+          const esCustom = CP_P_INIT[cp] !== partido || !CP_P_INIT[cp];
+          const zml = getZonaML(partido);
+          const isEdit = editCP === cp;
+          return (
+            <div key={cp} style={{ padding: "0.45rem 1rem", borderBottom: i < filas.length - 1 ? "1px solid #1a1f2e" : "none", display: "flex", alignItems: "center", gap: "0", background: esCustom ? "#0d1119" : "transparent" }}>
+              <span style={{ width: "90px", fontFamily: "monospace", color: "#9ca3af", fontSize: "0.82rem" }}>
+                {cp}
+                {esCustom && <span style={{ marginLeft: "4px", background: "#1c1500", color: "#f59e0b", borderRadius: "4px", padding: "0 4px", fontSize: "0.6rem", fontWeight: 700 }}>CUSTOM</span>}
+              </span>
+              {isEdit ? (
+                <input autoFocus value={editVal} onChange={e => setEditVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter") guardar(cp, editVal); if (e.key === "Escape") setEditCP(null); }} style={{ ...S.input, flex: 1, padding: "3px 8px", fontSize: "0.82rem" }} list="partidos-list" />
+              ) : (
+                <span style={{ flex: 1, color: "#e5e7eb", fontSize: "0.82rem" }}>{partido}</span>
+              )}
+              <span style={{ width: "80px" }}>
+                {zml && <span style={{ background: ZONA_ML_BG[zml] || "#1a1f2e", color: ZONA_ML_COLOR[zml] || "#6b7280", borderRadius: "5px", padding: "1px 7px", fontSize: "0.68rem", fontWeight: 700 }}>{zml}</span>}
+              </span>
+              <div style={{ width: "80px", display: "flex", gap: "4px", justifyContent: "flex-end" }}>
+                {isEdit ? (
+                  <>
+                    <button onClick={() => guardar(cp, editVal)} style={{ ...S.btnSm(true, "#6366f1"), padding: "2px 8px" }}>OK</button>
+                    <button onClick={() => setEditCP(null)} style={{ ...S.btnSm(false), padding: "2px 6px" }}>x</button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => { setEditCP(cp); setEditVal(partido); }} style={{ ...S.btnSm(false), padding: "2px 7px", fontSize: "0.68rem", color: "#6b7280" }}>editar</button>
+                    {esCustom && <button onClick={() => eliminar(cp)} style={{ ...S.btnSm(false), padding: "2px 6px", fontSize: "0.68rem", color: "#f87171" }}>x</button>}
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ color: "#374151", fontSize: "0.72rem", marginTop: "0.75rem", textAlign: "right" }}>{filas.length} registros · CABA = CPs 1000–1499</div>
+    </div>
+  );
+}
+
 export default function App(){
   const [pantalla,setPantalla]=useState("dashboard");
   const [borrador,setBorrador]=useState([]);
@@ -741,7 +868,7 @@ export default function App(){
 
   if(pantalla==="asignacion"){return<PantallaAsignacion borrador={borrador} fileName={fileName} onConfirmar={confirmarAsignacion} onCancelar={()=>setPantalla("dashboard")} lc={lc}/>;}
 
-  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"}];
+  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"},{id:"localidades",l:"Localidades"}];
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0e1a",color:"#fff",fontFamily:"sans-serif"}}>
@@ -767,7 +894,8 @@ export default function App(){
         {tab==="imprimir"&&<TabImprimir envios={envios} zc={zc} lc={lc}/>}
         {tab==="manual"  &&<TabManual   setEnvios={setEnvios} onSuccess={()=>{setTab("envios");mostrarToast("Envio agregado");}} lc={lc} enviosExistentes={envios}/>}
         {tab==="tarifas" &&<TabTarifas  zc={zc} setZc={setZc} lc={lc} setLc={setLc}/>}
-        {tab==="informe" &&<TabInforme  envios={envios} zc={zc} lc={lc}/>}
+        {tab==="informe"  &&<TabInforme  envios={envios} zc={zc} lc={lc}/>}
+        {tab==="localidades"&&<TabLocalidades/>}
       </div>
     </div>
   );
