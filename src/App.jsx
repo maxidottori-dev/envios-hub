@@ -3,7 +3,7 @@ import * as XLSXLib from "xlsx";
 import { db } from "./firebase.js";
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from "firebase/firestore";
 
-const VERSION = "1.2";
+const VERSION = "1.3";
 
 // Estado derivado: si tiene trans asignado = asignado, si fue cancelado = cancelado, sino = sin_asignar
 function getEstado(e) {
@@ -904,6 +904,223 @@ function TabMapa({ envios, lc }) {
 }
 
 // ════════════════════════════════════════════════════════════════════
+// TAB LIQUIDACION — cobranzas y cambios/retiros pendientes
+// ════════════════════════════════════════════════════════════════════
+function TabLiquidacion({ envios, setEnvios, lc }) {
+  const [seccion, setSeccion] = useState("cobranzas"); // cobranzas | retiros
+  const [filTrans, setFilTrans] = useState("TODOS");
+  const [filEstado, setFilEstado] = useState("pendiente"); // pendiente | recibido | todos
+  const [notaModal, setNotaModal] = useState(null); // {id, tipo, nota}
+  const logActivas = Object.entries(lc).filter(([,v]) => v.activa).map(([k]) => k);
+
+  // Envios con cobranza
+  const conCobranza = envios.filter(e =>
+    e.cobranza !== null && e.cobranza !== undefined && e.cobranza > 0 && getEstado(e) !== "cancelado"
+  );
+  // Envios con cambio o retiro
+  const conRetiro = envios.filter(e =>
+    (e.cambio !== null || e.retiro !== null) && getEstado(e) !== "cancelado"
+  );
+
+  const lista = (seccion === "cobranzas" ? conCobranza : conRetiro).filter(e => {
+    if (filTrans !== "TODOS" && e.trans !== filTrans) return false;
+    const campo = seccion === "cobranzas" ? "cobranzaRecibida" : "retiroRecibido";
+    const recibido = !!e[campo];
+    if (filEstado === "pendiente" && recibido) return false;
+    if (filEstado === "recibido" && !recibido) return false;
+    return true;
+  });
+
+  // Totales cobranzas
+  const totalEsperado = conCobranza.filter(e => filTrans === "TODOS" || e.trans === filTrans).reduce((s,e) => s + (e.cobranza||0), 0);
+  const totalRecibido = conCobranza.filter(e => (filTrans === "TODOS" || e.trans === filTrans) && e.cobranzaRecibida).reduce((s,e) => s + (e.cobranza||0), 0);
+  const totalPendiente = totalEsperado - totalRecibido;
+
+  // Por logistica - cobranzas
+  const porLogCob = logActivas.map(l => {
+    const envL = conCobranza.filter(e => e.trans === l);
+    return {
+      l,
+      total: envL.reduce((s,e) => s + (e.cobranza||0), 0),
+      recibido: envL.filter(e => e.cobranzaRecibida).reduce((s,e) => s + (e.cobranza||0), 0),
+      pendienteN: envL.filter(e => !e.cobranzaRecibida).length,
+    };
+  }).filter(x => x.total > 0);
+
+  // Por logistica - retiros
+  const porLogRet = logActivas.map(l => {
+    const envL = conRetiro.filter(e => e.trans === l);
+    return {
+      l,
+      total: envL.length,
+      pendiente: envL.filter(e => !e.retiroRecibido).length,
+    };
+  }).filter(x => x.total > 0);
+
+  const marcarCobranza = (id, recibido) => {
+    setEnvios(p => p.map(e => e.id === id ? { ...e, cobranzaRecibida: recibido, cobranzaFecha: recibido ? fechaHoy() : null } : e));
+  };
+
+  const marcarRetiro = (id, recibido) => {
+    setEnvios(p => p.map(e => e.id === id ? { ...e, retiroRecibido: recibido, retiroFecha: recibido ? fechaHoy() : null } : e));
+  };
+
+  const guardarNota = () => {
+    if (!notaModal) return;
+    const { id, tipo, nota } = notaModal;
+    setEnvios(p => p.map(e => e.id === id ? { ...e, [tipo]: nota } : e));
+    setNotaModal(null);
+  };
+
+  return (
+    <div>
+      {/* Selector seccion */}
+      <div style={{ ...S.card, padding: "0.65rem 1rem", marginBottom: "0.8rem", display: "flex", gap: "4px", flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={() => setSeccion("cobranzas")} style={S.btn(seccion === "cobranzas", "#f59e0b")}>💰 Cobranzas</button>
+        <button onClick={() => setSeccion("retiros")} style={S.btn(seccion === "retiros", "#ec4899")}>🔄 Cambios y Retiros</button>
+        <span style={{ color: "#374151", fontSize: "0.6rem" }}>|</span>
+        <button onClick={() => setFilEstado("pendiente")} style={S.btnSm(filEstado === "pendiente", "#f59e0b")}>Pendientes</button>
+        <button onClick={() => setFilEstado("recibido")} style={S.btnSm(filEstado === "recibido", "#10b981")}>Recibidos</button>
+        <button onClick={() => setFilEstado("todos")} style={S.btnSm(filEstado === "todos")}>Todos</button>
+        <span style={{ color: "#374151", fontSize: "0.6rem" }}>|</span>
+        {["TODOS", ...logActivas].map(t => (
+          <button key={t} onClick={() => setFilTrans(t)} style={S.btnSm(filTrans === t, lc[t]?.color || "#6366f1")}>{t}</button>
+        ))}
+      </div>
+
+      {/* Resumen cards */}
+      {seccion === "cobranzas" && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: "0.55rem", marginBottom: "0.8rem" }}>
+          <div style={{ ...S.card, padding: "0.75rem 1rem" }}>
+            <div style={{ color: "#f59e0b", fontWeight: 800, fontSize: "1.1rem" }}>{fmt(totalEsperado)}</div>
+            <div style={{ color: "#6b7280", fontSize: "0.62rem", marginTop: "2px" }}>Total esperado</div>
+          </div>
+          <div style={{ ...S.card, padding: "0.75rem 1rem", borderLeft: "3px solid #10b981" }}>
+            <div style={{ color: "#10b981", fontWeight: 800, fontSize: "1.1rem" }}>{fmt(totalRecibido)}</div>
+            <div style={{ color: "#6b7280", fontSize: "0.62rem", marginTop: "2px" }}>Recibido</div>
+          </div>
+          <div style={{ ...S.card, padding: "0.75rem 1rem", borderLeft: "3px solid #f59e0b" }}>
+            <div style={{ color: "#f59e0b", fontWeight: 800, fontSize: "1.1rem" }}>{fmt(totalPendiente)}</div>
+            <div style={{ color: "#6b7280", fontSize: "0.62rem", marginTop: "2px" }}>Pendiente</div>
+          </div>
+          {porLogCob.map(({ l, total, recibido, pendienteN }) => (
+            <div key={l} style={{ ...S.card, padding: "0.75rem 1rem", borderLeft: "3px solid " + lc[l].color }}>
+              <div style={{ color: lc[l].color, fontWeight: 800, fontSize: "0.9rem" }}>{l}</div>
+              <div style={{ color: "#10b981", fontWeight: 700, fontSize: "0.85rem" }}>{fmt(total)}</div>
+              {pendienteN > 0 && <div style={{ color: "#f59e0b", fontSize: "0.68rem", marginTop: "2px" }}>{pendienteN} pendiente{pendienteN !== 1 ? "s" : ""}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {seccion === "retiros" && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: "0.55rem", marginBottom: "0.8rem" }}>
+          <div style={{ ...S.card, padding: "0.75rem 1rem" }}>
+            <div style={{ color: "#ec4899", fontWeight: 800, fontSize: "1.8rem" }}>{conRetiro.length}</div>
+            <div style={{ color: "#6b7280", fontSize: "0.62rem", marginTop: "2px" }}>Total</div>
+          </div>
+          <div style={{ ...S.card, padding: "0.75rem 1rem", borderLeft: "3px solid #f59e0b" }}>
+            <div style={{ color: "#f59e0b", fontWeight: 800, fontSize: "1.8rem" }}>{conRetiro.filter(e => !e.retiroRecibido).length}</div>
+            <div style={{ color: "#6b7280", fontSize: "0.62rem", marginTop: "2px" }}>Pendientes</div>
+          </div>
+          <div style={{ ...S.card, padding: "0.75rem 1rem", borderLeft: "3px solid #10b981" }}>
+            <div style={{ color: "#10b981", fontWeight: 800, fontSize: "1.8rem" }}>{conRetiro.filter(e => e.retiroRecibido).length}</div>
+            <div style={{ color: "#6b7280", fontSize: "0.62rem", marginTop: "2px" }}>Recibidos</div>
+          </div>
+          {porLogRet.map(({ l, total, pendiente }) => (
+            <div key={l} style={{ ...S.card, padding: "0.75rem 1rem", borderLeft: "3px solid " + lc[l].color }}>
+              <div style={{ color: lc[l].color, fontWeight: 800, fontSize: "0.9rem" }}>{l}</div>
+              <div style={{ color: "#e5e7eb", fontWeight: 700 }}>{total} items</div>
+              {pendiente > 0 && <div style={{ color: "#f59e0b", fontSize: "0.68rem", marginTop: "2px" }}>{pendiente} pendiente{pendiente !== 1 ? "s" : ""}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Lista */}
+      {lista.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem", color: "#4b5563" }}>
+          <div style={{ fontSize: "2rem" }}>{seccion === "cobranzas" ? "💰" : "🔄"}</div>
+          <p style={{ marginTop: "0.5rem" }}>No hay {seccion === "cobranzas" ? "cobranzas" : "cambios/retiros"} {filEstado === "pendiente" ? "pendientes" : filEstado === "recibido" ? "recibidos" : ""}</p>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: "4px" }}>
+          {lista.map((e, i) => {
+            const recibido = seccion === "cobranzas" ? !!e.cobranzaRecibida : !!e.retiroRecibido;
+            const fecha = seccion === "cobranzas" ? e.cobranzaFecha : e.retiroFecha;
+            const nota = seccion === "cobranzas" ? e.cobranzaNota : e.retiroNota;
+            const lci = lc[e.trans];
+            return (
+              <div key={e.id} style={{ ...S.card, padding: "0.6rem 1rem", display: "flex", alignItems: "flex-start", gap: "0.6rem", flexWrap: "wrap", opacity: recibido ? 0.6 : 1 }}>
+                {/* Checkbox recibido */}
+                <div style={{ paddingTop: "2px" }}>
+                  <Chk checked={recibido} onChange={() => seccion === "cobranzas" ? marcarCobranza(e.id, !recibido) : marcarRetiro(e.id, !recibido)} size={18} />
+                </div>
+                <div style={{ flex: 1, minWidth: "160px" }}>
+                  <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginBottom: "3px", alignItems: "center" }}>
+                    {e.trans && <Bdg label={e.trans} bg={lci?.bg || "#1a1f2e"} t={lci?.color || "#6b7280"} />}
+                    {e.turno && <Bdg label={e.turno} bg={TURNO_C[e.turno]?.bg || "#130d2a"} t={TURNO_C[e.turno]?.c || "#a78bfa"} />}
+                    {e.fecha && <Bdg label={fmtCorta(e.fecha)} bg="#12172a" t="#6b7280" />}
+                    {recibido && <Bdg label={"Recibido" + (fecha ? " " + fmtCorta(fecha) : "")} bg="#041f14" t="#34d399" />}
+                  </div>
+                  <div style={{ color: "#e5e7eb", fontSize: "0.82rem", lineHeight: 1.35 }}>{e.direccion}</div>
+                  <div style={{ color: "#374151", fontSize: "0.68rem", marginTop: "2px" }}>
+                    <span style={{ fontFamily: "monospace" }}>...{e.id.slice(-10)}</span>
+                    <span style={{ margin: "0 4px" }}>·</span>
+                    <span>{e.partido}</span>
+                  </div>
+                  {seccion === "cobranzas" && e.cambio !== null && (
+                    <div style={{ color: "#ec4899", fontSize: "0.72rem", marginTop: "2px" }}>Cambio: {e.cambio}</div>
+                  )}
+                  {seccion === "retiros" && (
+                    <div style={{ marginTop: "3px" }}>
+                      {e.cambio !== null && <div style={{ color: "#ec4899", fontSize: "0.72rem" }}>Cambio: {e.cambio}</div>}
+                      {e.retiro !== null && <div style={{ color: "#f97316", fontSize: "0.72rem" }}>Retiro: {e.retiro}</div>}
+                    </div>
+                  )}
+                  {nota && <div style={{ color: "#6b7280", fontSize: "0.7rem", fontStyle: "italic", marginTop: "2px" }}>"{nota}"</div>}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px", flexShrink: 0 }}>
+                  {seccion === "cobranzas" && (
+                    <div style={{ color: "#f59e0b", fontWeight: 800, fontSize: "1rem" }}>{fmt(e.cobranza)}</div>
+                  )}
+                  <button
+                    onClick={() => setNotaModal({ id: e.id, tipo: seccion === "cobranzas" ? "cobranzaNota" : "retiroNota", nota: nota || "" })}
+                    style={{ ...S.btnSm(false), padding: "2px 8px", fontSize: "0.68rem", color: "#6b7280" }}
+                  >
+                    {nota ? "ver nota" : "+ nota"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Modal nota */}
+      {notaModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+          <div style={{ ...S.card, padding: "1.25rem", width: "100%", maxWidth: "380px" }}>
+            <h3 style={{ margin: "0 0 0.75rem", fontWeight: 800, fontSize: "0.95rem" }}>Nota</h3>
+            <textarea
+              autoFocus
+              value={notaModal.nota}
+              onChange={e => setNotaModal(p => ({ ...p, nota: e.target.value }))}
+              placeholder="Escribi una nota opcional..."
+              style={{ ...S.input, display: "block", width: "100%", height: "80px", resize: "vertical", marginBottom: "0.75rem" }}
+            />
+            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+              <button onClick={() => setNotaModal(null)} style={S.btn(false)}>Cancelar</button>
+              <button onClick={guardarNota} style={{ ...S.btn(true), background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }}>Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════
 // TAB LOCALIDADES — ver, editar y agregar CP → Partido
 // ════════════════════════════════════════════════════════════════════
 const CP_P_INIT = {"1601":"La Plata","1607":"San Isidro","1608":"Tigre","1609":"San Isidro","1610":"Tigre","1611":"Tigre","1612":"Malvinas Argentinas","1613":"Malvinas Argentinas","1614":"Malvinas Argentinas","1615":"Malvinas Argentinas","1616":"Malvinas Argentinas","1617":"Tigre","1618":"Tigre","1619":"Escobar","1620":"Escobar","1621":"Tigre","1622":"Escobar","1623":"Escobar","1624":"Tigre","1625":"Escobar","1626":"Escobar","1627":"Escobar","1628":"Escobar","1629":"Pilar","1630":"Pilar","1631":"Pilar","1632":"Pilar","1633":"Pilar","1634":"Pilar","1635":"Pilar","1636":"Vicente Lopez","1637":"Vicente Lopez","1638":"Vicente Lopez","1640":"San Isidro","1641":"San Isidro","1642":"San Isidro","1643":"San Isidro","1644":"San Fernando","1645":"San Fernando","1646":"San Fernando","1647":"Zarate","1648":"Tigre","1649":"San Fernando","1650":"San Martin","1651":"San Martin","1653":"San Martin","1655":"San Martin","1657":"San Martin","1659":"San Miguel","1660":"Jose C Paz","1661":"San Miguel","1662":"San Miguel","1663":"San Miguel","1664":"Pilar","1665":"Jose C Paz","1666":"Jose C Paz","1667":"Pilar","1669":"Pilar","1670":"Tigre","1671":"Tigre","1672":"San Martin","1674":"Tres de Febrero","1675":"Tres de Febrero","1676":"Tres de Febrero","1678":"Tres de Febrero","1682":"Tres de Febrero","1683":"Tres de Febrero","1684":"Moron","1685":"Moron","1686":"Hurlingham","1687":"Tres de Febrero","1688":"Hurlingham","1689":"La Matanza Norte","1692":"Tres de Febrero","1702":"Tres de Febrero","1703":"Tres de Febrero","1704":"La Matanza Norte","1706":"Moron","1707":"Moron","1708":"Moron","1712":"Moron","1713":"Ituzaingo","1714":"Ituzaingo","1715":"Ituzaingo","1716":"Merlo","1718":"Merlo","1721":"Merlo","1722":"Merlo","1723":"Merlo","1724":"Merlo","1727":"Marcos Paz","1736":"Moreno","1738":"Moreno","1740":"Moreno","1742":"Moreno","1743":"Moreno","1744":"Moreno","1745":"Moreno","1746":"Moreno","1748":"Gral. Rodriguez","1749":"Gral. Rodriguez","1751":"La Matanza Norte","1752":"La Matanza Norte","1753":"La Matanza Norte","1754":"La Matanza Norte","1755":"La Matanza Norte","1757":"La Matanza Sur","1758":"La Matanza Sur","1759":"La Matanza Sur","1761":"La Matanza Norte","1763":"La Matanza Sur","1764":"La Matanza Sur","1765":"La Matanza Sur","1766":"La Matanza Norte","1768":"La Matanza Norte","1770":"La Matanza Norte","1771":"La Matanza Norte","1772":"La Matanza Norte","1774":"La Matanza Norte","1778":"La Matanza Norte","1785":"La Matanza Norte","1786":"La Matanza Sur","1801":"Ezeiza","1802":"Ezeiza","1803":"Ezeiza","1804":"Ezeiza","1805":"Esteban Echeverria","1806":"Ezeiza","1807":"Ezeiza","1808":"Canuelas","1812":"Canuelas","1813":"Ezeiza","1814":"Canuelas","1815":"Canuelas","1816":"Canuelas","1821":"Lomas de Zamora","1822":"Lanus","1823":"Lanus","1824":"Lanus","1825":"Lanus","1826":"Lanus","1827":"Lomas de Zamora","1828":"Lomas de Zamora","1829":"Lomas de Zamora","1831":"Lomas de Zamora","1832":"Lomas de Zamora","1833":"Lomas de Zamora","1834":"Lomas de Zamora","1835":"Lomas de Zamora","1836":"Lomas de Zamora","1837":"Berazategui","1838":"Esteban Echeverria","1839":"Esteban Echeverria","1840":"Quilmes","1841":"Esteban Echeverria","1842":"Esteban Echeverria","1843":"Almirante Brown","1844":"Almirante Brown","1845":"Almirante Brown","1846":"Almirante Brown","1847":"Almirante Brown","1848":"Almirante Brown","1849":"Almirante Brown","1851":"Almirante Brown","1852":"Almirante Brown","1853":"Florencio Varela","1854":"Almirante Brown","1855":"Almirante Brown","1856":"Almirante Brown","1858":"Presidente Peron","1859":"Florencio Varela","1860":"Berazategui","1861":"Berazategui","1862":"Presidente Peron","1863":"Florencio Varela","1864":"San Vicente","1865":"San Vicente","1867":"Florencio Varela","1868":"Avellaneda","1869":"Avellaneda","1870":"Avellaneda","1871":"Avellaneda","1872":"Avellaneda","1873":"Avellaneda","1874":"Avellaneda","1875":"Avellaneda","1876":"Quilmes","1877":"Quilmes","1878":"Quilmes","1879":"Quilmes","1880":"Berazategui","1881":"Quilmes","1882":"Quilmes","1883":"Quilmes","1884":"Berazategui","1885":"Berazategui","1886":"Berazategui","1887":"Florencio Varela","1888":"Florencio Varela","1889":"Florencio Varela","1890":"Berazategui","1891":"Florencio Varela","1893":"Berazategui","1894":"La Plata","1895":"La Plata","1896":"La Plata","1897":"La Plata","1900":"La Plata","1901":"La Plata","1902":"La Plata","1903":"La Plata","1904":"La Plata","1905":"La Plata","1906":"La Plata","1907":"La Plata","1908":"La Plata","1909":"La Plata","1910":"La Plata","1912":"La Plata","1914":"La Plata","1923":"Berisso","1924":"Berisso","1925":"Ensenada","1926":"Ensenada","1927":"Ensenada","1929":"Berisso","1931":"Ensenada","1984":"San Vicente","2800":"Zarate","2801":"Zarate","2802":"Zarate","2804":"Campana","2805":"Campana","2806":"Zarate","2808":"Zarate","2812":"Campana","2814":"Ex.de la Cruz","2816":"Campana","6700":"Lujan","6701":"Lujan","6702":"Lujan","6703":"Ex.de la Cruz","6706":"Lujan","6708":"Lujan","6712":"Lujan"};
@@ -1081,7 +1298,7 @@ export default function App(){
 
   if(pantalla==="asignacion"){return<PantallaAsignacion borrador={borrador} fileName={fileName} onConfirmar={confirmarAsignacion} onCancelar={()=>setPantalla("dashboard")} lc={lc}/>;}
 
-  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"},{id:"localidades",l:"Localidades"}];
+  const TABS=[{id:"envios",l:"Envios"},{id:"imprimir",l:"Imprimir"},{id:"manual",l:"+ Manual"},{id:"tarifas",l:"Tarifas"},{id:"informe",l:"Informe"},{id:"liquidacion",l:"Liquidacion"},{id:"localidades",l:"Localidades"}];
 
   return(
     <div style={{minHeight:"100vh",background:"#0a0e1a",color:"#fff",fontFamily:"sans-serif"}}>
@@ -1107,8 +1324,9 @@ export default function App(){
         {tab==="imprimir"&&<TabImprimir envios={envios} zc={zc} lc={lc}/>}
         {tab==="manual"  &&<TabManual   setEnvios={setEnvios} onSuccess={()=>{setTab("envios");mostrarToast("Envio agregado");}} lc={lc} enviosExistentes={envios}/>}
         {tab==="tarifas" &&<TabTarifas  zc={zc} setZc={setZc} lc={lc} setLc={setLc}/>}
-        {tab==="informe"  &&<TabInforme  envios={envios} zc={zc} lc={lc}/>}
-        {tab==="localidades"&&<TabLocalidades/>}
+        {tab==="informe"     &&<TabInforme     envios={envios} zc={zc} lc={lc}/>}
+        {tab==="liquidacion" &&<TabLiquidacion envios={envios} setEnvios={setEnvios} lc={lc}/>}
+        {tab==="localidades" &&<TabLocalidades/>}
       </div>
     </div>
   );
