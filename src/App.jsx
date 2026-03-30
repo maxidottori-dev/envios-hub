@@ -316,7 +316,7 @@ function TabEnvios({envios,setEnvios,zc,lc,onReasignar}){
     if(filEstado!=="TODOS"&&est!==filEstado)return false;
     if(filZona!=="TODAS"&&getZonaML(e.partido)!==filZona)return false;
     if(filTurno!=="TODOS"&&e.turno!==filTurno)return false;
-    if(busqueda){const q=busqueda.toLowerCase();return e.direccion.toLowerCase().includes(q)||e.id.includes(q)||e.partido.toLowerCase().includes(q)||(e.nroSeguimiento||"").includes(q);}
+    if(busqueda){const srch=busqueda.toLowerCase();return e.direccion.toLowerCase().includes(srch)||e.id.includes(srch)||e.partido.toLowerCase().includes(srch)||(e.nroSeguimiento||"").includes(srch);}
     return true;
   });
   const activos=filtrados.filter(e=>getEstado(e)!=="cancelado");
